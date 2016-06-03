@@ -10,7 +10,7 @@ import pickle
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
-# TODO: Reference these guys from common-utils
+import simple_logging
 
 
 def log_error(msg):
