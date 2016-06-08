@@ -178,16 +178,16 @@ def data_dumper_thread(connection_object, idle_time_threshold):
             # This means potentially current round has ended.
             try:
                 target_file_name = None
-                # blocking acquire
-                connection_object.curr_file_lock.acquire()
                 if connection_object.curr_out_file is not None:
+                    # blocking acquire
+                    connection_object.curr_file_lock.acquire()
                     # close the current files
                     target_file_name = connection_object.curr_out_filename
                     connection_object.curr_out_file.close()
                     connection_object.curr_out_file = None
                     connection_object.curr_out_filename = None
-                # release file locks.
-                connection_object.curr_file_lock.release()
+                    # release file locks.
+                    connection_object.curr_file_lock.release()
                 if target_file_name is not None:
                     log_info("Dumping the file:" + str(target_file_name) + " into DB.")
                     # TODO: Dump the data to DB
