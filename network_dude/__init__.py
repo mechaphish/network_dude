@@ -12,6 +12,7 @@ import threading
 from dotenv import load_dotenv
 from common_utils.simple_logging import *
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+from farnsworth.models import *
 
 
 class Connection(object):
@@ -124,6 +125,7 @@ DEFAULT_PORT_NUMBER = 1999
 PORT_NUMBER_KEY = 'LISTEN_PORT'
 IDLE_TIME_KEY = 'ROUND_IDLE_TIME'
 DATA_FOLDER_KEY = 'QUEUE_FOLDER'
+CLEANUP_TRAFFIC_FILES_KEY = 'CLEANUP_RAW_TRAFFIC_FILES'
 
 
 def do_setup():
@@ -168,6 +170,9 @@ def data_dumper_thread(connection_object, idle_time_threshold):
     :return:
     """
     log_info("Starting Data Dumper Thread.")
+    cleanup_traffic_files = True
+    if CLEANUP_TRAFFIC_FILES_KEY in os.environ:
+        cleanup_traffic_files = int(os.environ[CLEANUP_TRAFFIC_FILES_KEY]) != 0
     poll_time = idle_time_threshold / 3
     if poll_time == 0:
         poll_time += 1
@@ -178,6 +183,7 @@ def data_dumper_thread(connection_object, idle_time_threshold):
             # This means potentially current round has ended.
             try:
                 target_file_name = None
+                curr_round = Round.current_round()
                 if connection_object.curr_out_file is not None:
                     # blocking acquire
                     connection_object.curr_file_lock.acquire()
@@ -190,7 +196,13 @@ def data_dumper_thread(connection_object, idle_time_threshold):
                     connection_object.curr_file_lock.release()
                 if target_file_name is not None:
                     log_info("Dumping the file:" + str(target_file_name) + " into DB.")
-                    # TODO: Dump the data to DB
+                    fp = open(target_file_name, 'rb')
+                    file_data = fp.read()
+                    fp.close()
+                    # check if we need to clean up..if yes, remove the file.
+                    if cleanup_traffic_files:
+                        os.system('rm ' + target_file_name)
+                    RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
             except Exception as e:
                 try:
                     # To avoid deadlocks.
