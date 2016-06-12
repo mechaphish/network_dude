@@ -78,7 +78,7 @@ class Connection(object):
             # This way we will be fast and doesn't slow down the receiving thread.
             if self.curr_file_lock.acquire(blocking=False):
                 if self.curr_out_file is None or self.curr_out_filename is None:
-                    self.curr_out_filename = os.path.join(self.datafolder, str(time.time()) + '_network_log')
+                    self.curr_out_filename = os.path.join(self.datafolder, str(time.time()) + '_network_traffic')
                     self.curr_out_file = open(self.curr_out_filename, 'wb')
                 pickle.dump(packet, self.curr_out_file)
                 self.curr_out_file.flush()
