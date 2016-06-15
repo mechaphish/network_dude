@@ -45,7 +45,7 @@ class Connection(object):
             if int(os.environ[Connection.LOG_EVERY_PKT_KEY]):
                 self.log_every_packet = True
 
-        log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.datafolder))
+        log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.data_folder))
 
     def start_listening(self):
         log_info("Starting to listen.")
@@ -76,9 +76,9 @@ class Connection(object):
             # Try to obtain lock.
             # but the lock should be non-blocking.
             # This way we will be fast and doesn't slow down the receiving thread.
-            if self.curr_file_lock.acquire(blocking=False):
+            if self.curr_file_lock.acquire(0):
                 if self.curr_out_file is None or self.curr_out_filename is None:
-                    self.curr_out_filename = os.path.join(self.datafolder, str(time.time()) + '_network_traffic')
+                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_network_traffic')
                     self.curr_out_file = open(self.curr_out_filename, 'wb')
                 pickle.dump(packet, self.curr_out_file)
                 self.curr_out_file.flush()
@@ -178,38 +178,39 @@ def data_dumper_thread(connection_object, idle_time_threshold):
         poll_time += 1
     while True:
         curr_time = time.time()
-        idle_time = curr_time - connection_object.last_pkt_received_at
-        if idle_time >= idle_time_threshold:
-            # This means potentially current round has ended.
-            try:
-                target_file_name = None
-                curr_round = Round.current_round()
-                if connection_object.curr_out_file is not None:
-                    # blocking acquire
-                    connection_object.curr_file_lock.acquire()
-                    # close the current files
-                    target_file_name = connection_object.curr_out_filename
-                    connection_object.curr_out_file.close()
-                    connection_object.curr_out_file = None
-                    connection_object.curr_out_filename = None
-                    # release file locks.
-                    connection_object.curr_file_lock.release()
-                if target_file_name is not None:
-                    log_info("Dumping the file:" + str(target_file_name) + " into DB.")
-                    fp = open(target_file_name, 'rb')
-                    file_data = fp.read()
-                    fp.close()
-                    # check if we need to clean up..if yes, remove the file.
-                    if cleanup_traffic_files:
-                        os.system('rm ' + target_file_name)
-                    RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
-            except Exception as e:
+        if connection_object.last_pkt_received_at is not None:
+            idle_time = curr_time - connection_object.last_pkt_received_at
+            if idle_time >= idle_time_threshold:
+                # This means potentially current round has ended.
                 try:
-                    # To avoid deadlocks.
-                    connection_object.curr_file_lock.release()
-                except Exception as e1:
-                    pass
-                log_error("Error occurred while trying to save the dump file to DB:" + str(e))
+                    target_file_name = None
+                    curr_round = Round.current_round()
+                    if connection_object.curr_out_file is not None:
+                        # blocking acquire
+                        connection_object.curr_file_lock.acquire()
+                        # close the current files
+                        target_file_name = connection_object.curr_out_filename
+                        connection_object.curr_out_file.close()
+                        connection_object.curr_out_file = None
+                        connection_object.curr_out_filename = None
+                        # release file locks.
+                        connection_object.curr_file_lock.release()
+                    if target_file_name is not None:
+                        log_info("End of Round. Dumping the file:" + str(target_file_name) + " into DB.")
+                        fp = open(target_file_name, 'rb')
+                        file_data = fp.read()
+                        fp.close()
+                        # check if we need to clean up..if yes, remove the file.
+                        if cleanup_traffic_files:
+                            os.system('rm ' + target_file_name)
+                        RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
+                except Exception as e:
+                    try:
+                        # To avoid deadlocks.
+                        connection_object.curr_file_lock.release()
+                    except Exception as e1:
+                        pass
+                    log_error("Error occurred while trying to save the dump file to DB:" + str(e))
         else:
             time.sleep(poll_time)
 
