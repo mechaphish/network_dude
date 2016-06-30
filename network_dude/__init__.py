@@ -79,7 +79,8 @@ class Connection(object):
             # This way we will be fast and doesn't slow down the receiving thread.
             if self.curr_file_lock.acquire():
                 if self.curr_out_file is None or self.curr_out_filename is None:
-                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_' + str(uuid.uuid4()) + '_network_traffic')
+                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_' +
+                                                          str(uuid.uuid4()) + '_network_traffic')
                     log_info("Starting dumping to new file:" + str(self.curr_out_filename))
                     self.curr_out_file = open(self.curr_out_filename, 'wb')
                 pickle.dump(packet, self.curr_out_file)
@@ -198,7 +199,8 @@ def data_dumper_thread(connection_object, idle_time_threshold):
                         # release file locks.
                         connection_object.curr_file_lock.release()
                         if target_file_name is not None:
-                            log_info("End of Round:" + str(curr_round.num)+ ". Dumping the file:" + str(target_file_name) + " into DB.")
+                            log_info("End of Round:" + str(curr_round.num) + ". Dumping the file:"
+                                     + str(target_file_name) + " into DB.")
                             fp = open(target_file_name, 'rb')
                             file_data = fp.read()
                             fp.close()
