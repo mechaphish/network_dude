@@ -9,6 +9,7 @@ import time
 import thread
 import pickle
 import threading
+import uuid
 from dotenv import load_dotenv
 from common_utils.simple_logging import *
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
@@ -76,9 +77,10 @@ class Connection(object):
             # Try to obtain lock.
             # but the lock should be non-blocking.
             # This way we will be fast and doesn't slow down the receiving thread.
-            if self.curr_file_lock.acquire(0):
+            if self.curr_file_lock.acquire():
                 if self.curr_out_file is None or self.curr_out_filename is None:
-                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_network_traffic')
+                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_' + str(uuid.uuid4()) + '_network_traffic')
+                    log_info("Starting dumping to new file:" + str(self.curr_out_filename))
                     self.curr_out_file = open(self.curr_out_filename, 'wb')
                 pickle.dump(packet, self.curr_out_file)
                 self.curr_out_file.flush()
@@ -195,15 +197,15 @@ def data_dumper_thread(connection_object, idle_time_threshold):
                         connection_object.curr_out_filename = None
                         # release file locks.
                         connection_object.curr_file_lock.release()
-                    if target_file_name is not None:
-                        log_info("End of Round. Dumping the file:" + str(target_file_name) + " into DB.")
-                        fp = open(target_file_name, 'rb')
-                        file_data = fp.read()
-                        fp.close()
-                        # check if we need to clean up..if yes, remove the file.
-                        if cleanup_traffic_files:
-                            os.system('rm ' + target_file_name)
-                        RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
+                        if target_file_name is not None:
+                            log_info("End of Round:" + str(curr_round.num)+ ". Dumping the file:" + str(target_file_name) + " into DB.")
+                            fp = open(target_file_name, 'rb')
+                            file_data = fp.read()
+                            fp.close()
+                            # check if we need to clean up..if yes, remove the file.
+                            if cleanup_traffic_files:
+                                os.system('rm ' + target_file_name)
+                            RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
                 except Exception as e:
                     try:
                         # To avoid deadlocks.
