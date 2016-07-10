@@ -44,7 +44,7 @@ class Connection(object):
         self.curr_out_filename = None
         self.curr_out_file = None
         self.last_pkt_received_at = None
-        self.log_every_packet = str2bool(os.environ.get('LOG_EVERY_PACKET', "True"))
+        self.log_every_packet = str2bool(os.environ.get('LOG_EVERY_PACKET', "False"))
         self.curr_file_lock = threading.Lock()
 
         log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.data_folder))
