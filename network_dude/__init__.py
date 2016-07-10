@@ -3,17 +3,22 @@ This module handles parsing data provided by DARPA UDP packets
 into pickled objects and writes them to DB do after each round.
 """
 import os
-import struct
-import socket
-import time
-import thread
 import pickle
+import shutil
+import socket
+import struct
+import thread
 import threading
+import time
 import uuid
+
 from dotenv import load_dotenv
 from common_utils.simple_logging import *
-load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 from farnsworth.models import *
+
+def str2bool(string):
+    return string.lower() in ["true", "t", "1"]
 
 
 class Connection(object):
@@ -23,7 +28,6 @@ class Connection(object):
 
     CLIENT, SERVER = (0, 1)
     HEADER_LEN = 15
-    LOG_EVERY_PKT_KEY = 'LOG_EVERY_PACKET'
 
     def __init__(self, port, data_folder):
         """
@@ -34,17 +38,14 @@ class Connection(object):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        self.sock.bind(('', port))
+        self.sock.bind(('0.0.0.0', port))
 
         self.data_folder = data_folder
         self.curr_out_filename = None
         self.curr_out_file = None
         self.last_pkt_received_at = None
-        self.log_every_packet = False
+        self.log_every_packet = str2bool(os.environ.get('LOG_EVERY_PACKET', "True"))
         self.curr_file_lock = threading.Lock()
-        if Connection.LOG_EVERY_PKT_KEY in os.environ:
-            if int(os.environ[Connection.LOG_EVERY_PKT_KEY]):
-                self.log_every_packet = True
 
         log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.data_folder))
 
@@ -120,61 +121,15 @@ class Connection(object):
 
         return csid, connection_id, msg_id, side, message
 
-DEFAULT_DATA_FOLDER = "queue"
-MIN_IDLE_TIME = 15
-DEFAULT_IDLE_TIME = 20
-DEFAULT_PORT_NUMBER = 1999
-PORT_NUMBER_KEY = 'LISTEN_PORT'
-IDLE_TIME_KEY = 'ROUND_IDLE_TIME'
-DATA_FOLDER_KEY = 'QUEUE_FOLDER'
-CLEANUP_TRAFFIC_FILES_KEY = 'CLEANUP_RAW_TRAFFIC_FILES'
-
-
-def do_setup():
-    """
-        Perform initial setup.
-        1. Get IDLE time.
-        2. Get Data folder. (and clean it).
-        3. Get port number.
-    :return: round_idle_time, data_folder, listen_port
-    """
-    # Setup idle time between rounds
-    round_idle_time = DEFAULT_IDLE_TIME
-    if IDLE_TIME_KEY in os.environ:
-        round_idle_time = int(os.environ[IDLE_TIME_KEY])
-    # Ensure that we have some minimum timeout.
-    round_idle_time = max(MIN_IDLE_TIME, round_idle_time)
-    # Setup Data folder
-    data_folder = DEFAULT_DATA_FOLDER
-    if DATA_FOLDER_KEY in os.environ:
-        data_folder = os.environ[DATA_FOLDER_KEY]
-    if os.path.exists(data_folder):
-        log_info("Cleaning up Data Folder:" + str(data_folder))
-        os.system("rm -rf " + data_folder)
-    # Port number on which we need to listen
-    listen_port = DEFAULT_PORT_NUMBER
-    if PORT_NUMBER_KEY in os.environ:
-        listen_port = int(os.environ[PORT_NUMBER_KEY])
-    # Complete Setup
-    log_info("Creating Data Folder:" + str(data_folder))
-    os.makedirs(data_folder)
-    log_success("Setup Complete with Data Folder:" + str(data_folder) + " and timeout:" + str(round_idle_time) +
-                " seconds")
-
-    return round_idle_time, data_folder, listen_port
-
-
 def data_dumper_thread(connection_object, idle_time_threshold):
     """
-        Thread which writes the collected data to DB.
+    Thread which writes the collected data to DB.
     :param connection_object: Connection object, which needs to be monitored.
     :param idle_time_threshold: Idle threshold time.
     :return:
     """
     log_info("Starting Data Dumper Thread.")
-    cleanup_traffic_files = True
-    if CLEANUP_TRAFFIC_FILES_KEY in os.environ:
-        cleanup_traffic_files = int(os.environ[CLEANUP_TRAFFIC_FILES_KEY]) != 0
+    cleanup_traffic_files = str2bool(os.environ.get('CLEANUP_RAW_TRAFFIC_FILES', "True"))
     poll_time = idle_time_threshold / 3
     if poll_time == 0:
         poll_time += 1
@@ -217,14 +172,25 @@ def data_dumper_thread(connection_object, idle_time_threshold):
             time.sleep(poll_time)
 
 
+
 def main():
-    round_idle_time, data_folder, listen_port = do_setup()
+    # Setup idle time between rounds (ensure that we have some minimum timeout)
+    MIN_IDLE_TIME = 15
+    round_idle_time = max(MIN_IDLE_TIME, int(os.environ.get('ROUND_IDLE_TIME', 20)))
+    # Setup Data folder: delete and recreate
+    data_folder = os.environ.get('DATA_FOLDER', "queue")
+    if os.path.exists(data_folder):
+        shutil.rmtree(data_folder)
+    os.makedirs(data_folder)
+    # Port number on which we need to listen
+    port = int(os.environ.get("IDS_SERVICE_PORT", 1999))
+
     # Create connection object.
-    conn_obj = Connection(listen_port, data_folder)
+    connection = Connection(port, data_folder)
     # Start the data dumper thread.
-    thread.start_new_thread(data_dumper_thread, (conn_obj, round_idle_time, ))
+    thread.start_new_thread(data_dumper_thread, (connection, round_idle_time, ))
     # Continue listening.
-    conn_obj.start_listening()
+    connection.start_listening()
 
 if __name__ == "__main__":
     main()
