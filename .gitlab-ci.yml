@@ -1,0 +1,10 @@
+# lint:
+#   script: "lint.py"
+#   tags: ["cgc-linter"]
+
+build_images:
+    only: ["master"]
+    stage: deploy
+    script:
+    - cgc-build network-dude
+    tags: ["docker-builder"]
