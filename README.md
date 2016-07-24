@@ -6,6 +6,10 @@ To replay pcaps:
 python ./tests/darpa_pcap_replayer.py pcaps IP PORT
 ```
 
+Then launch network-dude
+
 ```
-./bin/network_dude
+network-dude
 ```
+
+Settings are pulled from ENV as usual, see `.env.example`.

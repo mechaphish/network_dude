@@ -1,0 +1,6 @@
+*.pyc
+/.env
+/*.egg-info
+/cover/
+/.coverage
+/pylintrc
