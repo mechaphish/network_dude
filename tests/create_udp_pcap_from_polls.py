@@ -27,7 +27,7 @@ def open_pcap(filename):
     return pcap_handle
 
 
-def write_packet(pcap_handle, data):
+def write_packet(pcap_handle, data, side):
     if pcap_handle is None:
         return
 
@@ -35,7 +35,10 @@ def write_packet(pcap_handle, data):
     tv_sec = int(timestamp)
     tv_usec = int((float(timestamp) - int(timestamp)) * 1000000.0)
 
-    packet = '\x00\x00\x00\x00\x00\x00' + '\x00\x00\x00\x00\x00\x00' + '\xff\xff' + data
+    if side:
+        packet = '\x00\x00\x00\x00\x00\x00' + '\x00\x22\x33\x01\x00\x00' + '\xff\xff' + data
+    else:
+        packet = '\x00\x22\x33\x01\x00\x00' + '\x00\x00\x00\x00\x00\x00' + '\xff\xff' + data
 
     packet_len = len(packet)
     packet_header = struct.pack('>IIII', tv_sec, tv_usec, packet_len, packet_len)
@@ -74,6 +77,6 @@ for curr_file in all_tests:
         side = 1 if curr_data_pkt.is_input else 0
         msg_hdr = struct.pack("<LLLHB", dummy_cs_id, connection_id, msg_id, len(curr_data_pkt.data), side)
         msg_id += 1
-        write_packet(pcap_file_handle, msg_hdr + curr_data_pkt.data)
+        write_packet(pcap_file_handle, msg_hdr + curr_data_pkt.data, side)
     connection_id += 1
 pcap_file_handle.close()
