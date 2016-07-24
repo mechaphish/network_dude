@@ -51,7 +51,7 @@ def write_packet(pcap_handle, data, side):
 bin_file = sys.argv[1]
 xml_pov_dir = sys.argv[2]
 output_pcap_file = sys.argv[3]
-dummy_cs_id = 12345678L
+dummy_cs_id = int(sys.argv[4])
 all_tests = os.listdir(xml_pov_dir)
 log_info("Trying to create PCAP for:" + str(len(all_tests)) + " tests.")
 pcap_file_handle = open_pcap(output_pcap_file)
