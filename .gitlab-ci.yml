@@ -1,10 +1,24 @@
+stages:
+  - test
+  - build
+  - deploy
+
 # lint:
 #   script: "lint.py"
 #   tags: ["cgc-linter"]
 
 build_images:
-    only: ["master"]
-    stage: deploy
-    script:
-    - cgc-build network-dude
-    tags: ["docker-builder"]
+  stage: deploy
+  only: ["master"]
+  script:
+  - cgc-build network-dude
+  tags: ["docker-builder"]
+
+production:
+  stage: deploy
+  only: ["master"]
+  script:
+  - docker tag network-dude 172.16.7.72/network-dude:stable
+  - docker push 172.16.7.72/network-dude:stable
+  environment: production
+  tags: ["docker-builder"]
