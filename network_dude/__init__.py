@@ -19,7 +19,7 @@ from common_utils.simple_logging import *
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 from farnsworth.models import *
 
-MAX_CS_SIZE = 4*1024*1024  # 4 megs
+MAX_CS_SIZE = 6*1024*1024  # 6 megs
 CHUNKS_TIME = 60  # 1 minute
 
 
