@@ -9,13 +9,19 @@ import socket
 import struct
 import thread
 import threading
+import collections
 import time
 import uuid
+from Queue import Queue
 
 from dotenv import load_dotenv
 from common_utils.simple_logging import *
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 from farnsworth.models import *
+
+MAX_CS_SIZE = 6*1024*1024  # 6 megs
+CHUNKS_TIME = 60  # 1 minute
+
 
 def str2bool(string):
     return string.lower() in ["true", "t", "1"]
@@ -43,30 +49,21 @@ class Connection(object):
         self.data_folder = data_folder
         self.curr_out_filename = None
         self.curr_out_file = None
-        self.last_pkt_received_at = None
         self.log_every_packet = str2bool(os.environ.get('LOG_EVERY_PACKET', "False"))
         self.curr_file_lock = threading.Lock()
+        self.data_queue = Queue()
+        # holds amount of data for each cs
+        self.cs_data = collections.defaultdict(int)
 
         log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.data_folder))
 
     def start_listening(self):
+        # fast network thread, receive data, put into queue and move on.
         log_info("Starting to listen.")
         while True:
             # Receive data
             data = self.sock.recvfrom(0xFFFF)[0]
-            self.last_pkt_received_at = time.time()
-            # parse the contents.
-            packet = self.parse(data)
-            if packet is None:
-                continue
-
-            csid, connection_id, msg_id, side, message = packet
-
-            if self.log_every_packet:
-                log_info("csid: " + str(csid) + " connection: " + str(connection_id) + " message_id: " + str(msg_id) +
-                         " side: " + str(side))
-            # Write the parsed data to file
-            self.write_packet(packet)
+            self.data_queue.put(data)
 
     def write_packet(self, packet):
         """
@@ -75,17 +72,28 @@ class Connection(object):
         :return: None
         """
         try:
+            # get CS and size
+            pkt_cs = packet[0]
+            # side
+            pkt_side = packet[-2]
+            # ignore the packet, if this packet is not to server or binary
+            if pkt_side != 'server':
+                return
+            data_size = len(packet[-1])
             # Try to obtain lock.
             # but the lock should be non-blocking.
             # This way we will be fast and doesn't slow down the receiving thread.
             if self.curr_file_lock.acquire():
-                if self.curr_out_file is None or self.curr_out_filename is None:
-                    self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_' +
-                                                          str(uuid.uuid4()) + '_network_traffic')
-                    log_info("Starting dumping to new file:" + str(self.curr_out_filename))
-                    self.curr_out_file = open(self.curr_out_filename, 'wb')
-                pickle.dump(packet, self.curr_out_file)
-                self.curr_out_file.flush()
+                # if we already captured enough data for this CS, ignore the packet.
+                if self.cs_data[pkt_cs] < MAX_CS_SIZE:
+                    if self.curr_out_file is None or self.curr_out_filename is None:
+                        self.curr_out_filename = os.path.join(self.data_folder, str(time.time()) + '_' +
+                                                              str(uuid.uuid4()) + '_network_traffic')
+                        log_info("Starting dumping to new file:" + str(self.curr_out_filename))
+                        self.curr_out_file = open(self.curr_out_filename, 'wb')
+                    self.cs_data[pkt_cs] += data_size
+                    pickle.dump(packet, self.curr_out_file)
+                    self.curr_out_file.flush()
                 self.curr_file_lock.release()
             else:
                 log_error("Unable to obtain lock on current file, ignoring the packet.")
@@ -122,63 +130,82 @@ class Connection(object):
 
         return csid, connection_id, msg_id, side, message
 
-def data_dumper_thread(connection_object, idle_time_threshold):
+
+def pkt_processor_thread(connection_object):
+    """
+        Thread which parses each UDP pkt and writes the corresponding data into a file
+    :param connection_object: Connection object, which is the producer of the data.
+    :return: Never return
+    """
+    target_data_queue = connection_object.data_queue
+    while True:
+        try:
+            curr_data = target_data_queue.get()
+            packet = connection_object.parse(curr_data)
+            if packet is None:
+                continue
+            if connection_object.log_every_packet:
+                csid, connection_id, msg_id, side, message = packet
+                log_info("csid: " + str(csid) + " connection: " + str(connection_id) + " message_id: " + str(msg_id) +
+                         " side: " + str(side))
+            connection_object.write_packet(packet)
+        except Exception as e:
+            log_error("Error occurred while trying to process pkt:" + str(e) + ", Ignoring and moving on.")
+
+
+def data_dumper_thread(connection_object):
     """
     Thread which writes the collected data to DB.
     :param connection_object: Connection object, which needs to be monitored.
-    :param idle_time_threshold: Idle threshold time.
     :return:
     """
     log_info("Starting Data Dumper Thread.")
     cleanup_traffic_files = str2bool(os.environ.get('CLEANUP_RAW_TRAFFIC_FILES', "True"))
-    poll_time = idle_time_threshold / 3
-    if poll_time == 0:
-        poll_time += 1
     while True:
-        curr_time = time.time()
-        if connection_object.last_pkt_received_at is not None:
-            idle_time = curr_time - connection_object.last_pkt_received_at
-            if idle_time >= idle_time_threshold:
-                # This means potentially current round has ended.
-                try:
-                    target_file_name = None
-                    curr_round = Round.current_round()
-                    if connection_object.curr_out_file is not None:
-                        # blocking acquire
-                        connection_object.curr_file_lock.acquire()
-                        # close the current files
-                        target_file_name = connection_object.curr_out_filename
-                        connection_object.curr_out_file.close()
-                        connection_object.curr_out_file = None
-                        connection_object.curr_out_filename = None
-                        # release file locks.
-                        connection_object.curr_file_lock.release()
-                        if target_file_name is not None:
-                            log_info("End of Round:" + str(curr_round.num) + ". Dumping the file:"
-                                     + str(target_file_name) + " into DB.")
-                            fp = open(target_file_name, 'rb')
-                            file_data = fp.read()
-                            fp.close()
-                            # check if we need to clean up..if yes, remove the file.
-                            if cleanup_traffic_files:
-                                os.system('rm ' + target_file_name)
-                            RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
-                except Exception as e:
-                    try:
-                        # To avoid deadlocks.
-                        connection_object.curr_file_lock.release()
-                    except Exception as e1:
-                        pass
-                    log_error("Error occurred while trying to save the dump file to DB:" + str(e))
-        else:
-            time.sleep(poll_time)
-
+        # sleep for chunks time.
+        time.sleep(CHUNKS_TIME)
+        try:
+            target_file_name = None
+            curr_round = Round.current_round()
+            if connection_object.curr_out_file is not None:
+                # blocking acquire
+                connection_object.curr_file_lock.acquire()
+                # close the current files
+                target_file_name = connection_object.curr_out_filename
+                # Do not close file here (as it might delay the pkt processor thread),
+                # just get the file object and move on
+                # we want the network thread to be super fast.
+                target_fp = connection_object.curr_out_file
+                connection_object.curr_out_file = None
+                connection_object.curr_out_filename = None
+                connection_object.cs_data = collections.defaultdict(int)
+                # release file locks.
+                connection_object.curr_file_lock.release()
+                # close the file
+                target_fp.close()
+                if target_file_name is not None:
+                    log_info("Chunk Time Expired in Round:" + str(curr_round.num) + ". Dumping the file:"
+                             + str(target_file_name) + " into DB.")
+                    fp = open(target_file_name, 'rb')
+                    file_data = fp.read()
+                    fp.close()
+                    # check if we need to clean up..if yes, remove the file.
+                    if cleanup_traffic_files:
+                        os.system('rm ' + target_file_name)
+                    RawRoundTraffic.create(round=curr_round, pickled_data=file_data)
+        except Exception as e:
+            try:
+                # To avoid deadlocks.
+                connection_object.curr_file_lock.release()
+            except Exception as e1:
+                pass
+            log_error("Error occurred while trying to save the dump file to DB:" + str(e))
 
 
 def main():
     # Setup idle time between rounds (ensure that we have some minimum timeout)
-    MIN_IDLE_TIME = 15
-    round_idle_time = max(MIN_IDLE_TIME, int(os.environ.get('ROUND_IDLE_TIME', 20)))
+    # MIN_IDLE_TIME = 15
+    # round_idle_time = max(MIN_IDLE_TIME, int(os.environ.get('ROUND_IDLE_TIME', 20)))
     # Setup Data folder: delete and recreate
     data_folder = os.environ.get('DATA_FOLDER', "queue")
     if os.path.exists(data_folder):
@@ -189,8 +216,10 @@ def main():
 
     # Create connection object.
     connection = Connection(port, data_folder)
+    # Start the pkt processor thread
+    thread.start_new_thread(pkt_processor_thread, (connection, ))
     # Start the data dumper thread.
-    thread.start_new_thread(data_dumper_thread, (connection, round_idle_time, ))
+    thread.start_new_thread(data_dumper_thread, (connection, ))
     # Continue listening.
     connection.start_listening()
 
