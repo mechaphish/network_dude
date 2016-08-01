@@ -12,6 +12,7 @@ import threading
 import collections
 import time
 import uuid
+from Queue import Queue
 
 from dotenv import load_dotenv
 from common_utils.simple_logging import *
@@ -50,28 +51,19 @@ class Connection(object):
         self.curr_out_file = None
         self.log_every_packet = str2bool(os.environ.get('LOG_EVERY_PACKET', "False"))
         self.curr_file_lock = threading.Lock()
+        self.data_queue = Queue()
         # holds amount of data for each cs
         self.cs_data = collections.defaultdict(int)
 
         log_info("logging network traffic from port:" + str(port) + " to folder:" + str(self.data_folder))
 
     def start_listening(self):
+        # fast network thread, receive data, put into queue and move on.
         log_info("Starting to listen.")
         while True:
             # Receive data
             data = self.sock.recvfrom(0xFFFF)[0]
-            # parse the contents.
-            packet = self.parse(data)
-            if packet is None:
-                continue
-
-            csid, connection_id, msg_id, side, message = packet
-
-            if self.log_every_packet:
-                log_info("csid: " + str(csid) + " connection: " + str(connection_id) + " message_id: " + str(msg_id) +
-                         " side: " + str(side))
-            # Write the parsed data to file
-            self.write_packet(packet)
+            self.data_queue.put(data)
 
     def write_packet(self, packet):
         """
@@ -134,6 +126,28 @@ class Connection(object):
         return csid, connection_id, msg_id, side, message
 
 
+def pkt_processor_thread(connection_object):
+    """
+        Thread which parses each UDP pkt and writes the corresponding data into a file
+    :param connection_object: Connection object, which is the producer of the data.
+    :return: Never return
+    """
+    target_data_queue = connection_object.data_queue
+    while True:
+        try:
+            curr_data = target_data_queue.get()
+            packet = connection_object.parse(curr_data)
+            if packet is None:
+                continue
+            if connection_object.log_every_packet:
+                csid, connection_id, msg_id, side, message = packet
+                log_info("csid: " + str(csid) + " connection: " + str(connection_id) + " message_id: " + str(msg_id) +
+                         " side: " + str(side))
+            connection_object.write_packet(packet)
+        except Exception as e:
+            log_error("Error occurred while trying to process pkt:" + str(e) + ", Ignoring and moving on.")
+
+
 def data_dumper_thread(connection_object):
     """
     Thread which writes the collected data to DB.
@@ -153,7 +167,7 @@ def data_dumper_thread(connection_object):
                 connection_object.curr_file_lock.acquire()
                 # close the current files
                 target_file_name = connection_object.curr_out_filename
-                # Do not close file here (as it might delay the network thread),
+                # Do not close file here (as it might delay the pkt processor thread),
                 # just get the file object and move on
                 # we want the network thread to be super fast.
                 target_fp = connection_object.curr_out_file
@@ -197,6 +211,8 @@ def main():
 
     # Create connection object.
     connection = Connection(port, data_folder)
+    # Start the pkt processor thread
+    thread.start_new_thread(pkt_processor_thread, (connection, ))
     # Start the data dumper thread.
     thread.start_new_thread(data_dumper_thread, (connection, ))
     # Continue listening.
