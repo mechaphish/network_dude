@@ -74,6 +74,11 @@ class Connection(object):
         try:
             # get CS and size
             pkt_cs = packet[0]
+            # side
+            pkt_side = packet[-2]
+            # ignore the packet, if this packet is not to server or binary
+            if pkt_side != 'server':
+                return
             data_size = len(packet[-1])
             # Try to obtain lock.
             # but the lock should be non-blocking.
